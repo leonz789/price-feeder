@@ -84,11 +84,12 @@ func (s *source) fetch(token string) (*types.PriceInfo, error) {
 	}
 
 	// --- CL/EL synchronization ---
-	elBlockNumber, clSlot, stateRoot, err := getFinalizedELBlockNumber()
+	// elBlockNumber, clSlot, stateRoot, err := getFinalizedELBlockNumber()
+	_, clSlot, stateRoot, err := getFinalizedELBlockNumber()
 	if err != nil {
 		return nil, fmt.Errorf("fail to get finalized EL block number, error:%w", err)
 	}
-	blockNumber := big.NewInt(elBlockNumber)
+	// blockNumber := big.NewInt(elBlockNumber)
 	// Calculate epoch from slot
 	epoch := clSlot / slotsPerEpoch
 	// --- End CL/EL synchronization ---
@@ -133,22 +134,22 @@ func (s *source) fetch(token string) (*types.PriceInfo, error) {
 		}
 
 		// Capsule balance integration
-		capsuleAddr, err := getCapsuleAddressForStaker(s.ethClient, stakerInfo.Address, blockNumber)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get capsule address, staker_index:%d, staker:%s, err:%w", stakerIdx, stakerInfo.Address, err)
-		}
-
-		if len(capsuleAddr) == 0 || capsuleAddr == zeroAddressHex || s.ethClient == nil {
-			return nil, fmt.Errorf("capsule address is empty:%t or ethClient is nil:%t, staker_index:%d, staker:%s", len(capsuleAddr) == 0, s.ethClient == nil, stakerIdx, stakerInfo.Address)
-		}
-
-		capsuleBalance, err := getCapsuleBalance(s.ethClient, capsuleAddr, blockNumber)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get capsule balance, staker_index:%d, capsule:%s, err:%w", stakerIdx, capsuleAddr, err)
-		}
-
-		capsuleBalanceGwei := new(big.Int).Div(capsuleBalance, big.NewInt(1e9))
-		stakerBalance += capsuleBalanceGwei.Uint64()
+		//		capsuleAddr, err := getCapsuleAddressForStaker(s.ethClient, stakerInfo.Address, blockNumber)
+		//		if err != nil {
+		//			return nil, fmt.Errorf("failed to get capsule address, staker_index:%d, staker:%s, err:%w", stakerIdx, stakerInfo.Address, err)
+		//		}
+		//
+		//		if len(capsuleAddr) == 0 || capsuleAddr == zeroAddressHex || s.ethClient == nil {
+		//			return nil, fmt.Errorf("capsule address is empty:%t or ethClient is nil:%t, staker_index:%d, staker:%s", len(capsuleAddr) == 0, s.ethClient == nil, stakerIdx, stakerInfo.Address)
+		//		}
+		//
+		//		capsuleBalance, err := getCapsuleBalance(s.ethClient, capsuleAddr, blockNumber)
+		//		if err != nil {
+		//			return nil, fmt.Errorf("failed to get capsule balance, staker_index:%d, capsule:%s, err:%w", stakerIdx, capsuleAddr, err)
+		//		}
+		//
+		//		capsuleBalanceGwei := new(big.Int).Div(capsuleBalance, big.NewInt(1e9))
+		//		stakerBalance += capsuleBalanceGwei.Uint64()
 		// --- End capsule balance integration ---
 
 		if stakerBalance != stakerInfo.Balance {
