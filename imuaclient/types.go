@@ -627,8 +627,7 @@ func Init(conf *feedertypes.Config, mnemonic, privFile string, txOnly bool, stan
 
 	confImua := conf.Imua
 
-	confSender := conf.Sender
-	confSender.PrivFile = privFile
+	conf.Sender.PrivFile = privFile
 
 	encCfg := encoding.MakeConfig(app.ModuleBasics)
 

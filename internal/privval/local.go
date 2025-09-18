@@ -56,7 +56,7 @@ func NewPrivValidatorImplLocal(conf *feedertypes.Config, logger feedertypes.Logg
 		logger.Info("load privatekey from local file", "path", privFile)
 		privBase64 = privKey.PrivKey.Value
 	} else if !bip39.IsMnemonicValid(mnemonic) {
-		err = feedertypes.ErrInitFail.Wrap(fmt.Sprintf("invalid mnemonic:%s", mnemonic))
+		err = feedertypes.ErrInitFail.Wrap("invalid mnemonic:%s")
 		return
 	}
 	var privKey cryptotypes.PrivKey
@@ -66,7 +66,7 @@ func NewPrivValidatorImplLocal(conf *feedertypes.Config, logger feedertypes.Logg
 		var privBytes []byte
 		privBytes, err = base64.StdEncoding.DecodeString(privBase64)
 		if err != nil {
-			err = feedertypes.ErrInitFail.Wrap(fmt.Sprintf("failed to parse privatekey from base64_string:%s, error:%v", privBase64, err))
+			err = feedertypes.ErrInitFail.Wrap(fmt.Sprintf("failed to parse privatekey from base64_string, error:%v", err))
 			return
 		}
 		//nolint:all

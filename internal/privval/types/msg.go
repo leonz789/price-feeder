@@ -1,4 +1,4 @@
-// package: github.com/okex/exchain/libs/tendermint/privval/types
+// package types contains message types for oracle stream communication with remote signer.
 package types
 
 import "errors"
@@ -27,6 +27,18 @@ func MustWrapMsg(msg any) (re OracleStreamMessage) {
 		re = OracleStreamMessage{
 			Sum: &OracleStreamMessage_Pong{
 				Pong: m,
+			},
+		}
+	case *GetPubKeyRequest:
+		re = OracleStreamMessage{
+			Sum: &OracleStreamMessage_GetPubKeyRequest{
+				GetPubKeyRequest: m,
+			},
+		}
+	case *GetPubKeyResponse:
+		re = OracleStreamMessage{
+			Sum: &OracleStreamMessage_GetPubKeyResponse{
+				GetPubKeyResponse: m,
 			},
 		}
 	default:

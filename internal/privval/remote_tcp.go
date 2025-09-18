@@ -89,16 +89,13 @@ func (pv *PrivValidatorImplRemote) Init() {
 }
 
 func (pv *PrivValidatorImplRemote) GetPubKey() (cryptotypes.PubKey, error) {
-	getPubKeyRequest := &types.OracleStreamMessage{
-		Sum: &types.OracleStreamMessage_GetPubKeyRequest{
-			GetPubKeyRequest: &types.GetPubKeyRequest{},
-		},
-	}
-	res := pv.sendMsgSync(getPubKeyRequest)
+	getPubKeyRequest := types.MustWrapMsg(&types.GetPubKeyRequest{})
+	res := pv.sendMsgSync(&getPubKeyRequest)
 	if res.err != nil {
 		return nil, res.err
 	}
 	timer := time.NewTimer(requestTimeout)
+	defer timer.Stop()
 	select {
 	case <-timer.C:
 	case pkBytes := <-res.result:
@@ -115,18 +112,15 @@ func (pv *PrivValidatorImplRemote) GetPubKey() (cryptotypes.PubKey, error) {
 }
 
 func (pv *PrivValidatorImplRemote) SignRawDataSync(rawData []byte) ([]byte, error) {
-	feedRequest := &types.OracleStreamMessage{
-		Sum: &types.OracleStreamMessage_SignPriceFeedRequest{
-			SignPriceFeedRequest: &types.SignPriceFeedRequest{
-				RawData: rawData,
-			},
-		},
-	}
-	res := pv.sendMsgSync(feedRequest)
+	feedRequest := types.MustWrapMsg(&types.SignPriceFeedRequest{
+		RawData: rawData,
+	})
+	res := pv.sendMsgSync(&feedRequest)
 	if res.err != nil {
 		return nil, res.err
 	}
 	timer := time.NewTimer(requestTimeout)
+	defer timer.Stop()
 	select {
 	case <-timer.C:
 	case r := <-res.result:
@@ -225,6 +219,7 @@ func (pv *PrivValidatorImplRemote) writeloop() {
 	pv.wg.Add(1)
 	defer pv.wg.Done()
 	tic := time.NewTicker(10 * time.Second)
+	defer tic.Stop()
 	w := utils.NewV2DelimitedWriter(pv.conn)
 	for {
 		var err error
@@ -250,7 +245,7 @@ func (pv *PrivValidatorImplRemote) writeloop() {
 				// we put the result channel into waiters map before we send the message to make sure the readloop will not miss/drop any expected response if any
 				pv.addWaiter(id, resultWriteView)
 				var n int
-				fmt.Println("writing price-feed-sign-request message with ID:", id)
+				pv.l.Debug("writing price-feed-sign-request message", "rqeuestID", id)
 				n, err = w.WriteMsgWithTimeout(req.payload, defaultRWTimeout)
 				if err != nil {
 					pv.l.Error("failed to write price-feed-sign-request message", "err", err)
@@ -315,9 +310,14 @@ func (pv *PrivValidatorImplRemote) sessionloop(success chan struct{}) {
 			} else {
 				pv.l.Error("failed to accept connection, waiting...", "err", err)
 			}
+		// TODO: we currently don't have a way to stop the session loop, we can add a Stop method to close the quitCh and exit the loop
 		case <-pv.quitCh:
 			// we don't handle rwloop quit signal here to avoid conflict, they will quit when the connection is closed
 			pv.l.Info("priv validator session loop quit signal received, closing connection")
+			if pv.conn != nil {
+				pv.conn.Close()
+			}
+			return
 		}
 	}
 }
@@ -346,8 +346,14 @@ func (pv *PrivValidatorImplRemote) pingpong(ping bool) {
 	}
 }
 
+// reconnect is not surpposed to be called concurrently on the same chan
 func (pv *PrivValidatorImplRemote) reconnect(quitCh chan struct{}) {
 	close(quitCh)
+	select {
+	case <-quitCh:
+	default:
+		close(quitCh)
+	}
 	select {
 	case pv.connTrigger <- struct{}{}:
 	default:
