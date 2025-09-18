@@ -8,7 +8,7 @@ import (
 )
 
 func TestConfig(t *testing.T) {
-	conf := InitConfig("./config-bak.yaml")
+	conf, _ := InitConfig("./config-bak.yaml")
 	tmp := strings.Map(func(r rune) rune {
 		if unicode.IsSpace(r) {
 			return -1
