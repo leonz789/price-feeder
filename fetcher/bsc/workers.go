@@ -13,8 +13,7 @@ import (
 type jobKind int
 
 const (
-	jobKindBatchDelegators jobKind = iota
-	jobKindFullScan
+	jobKindBatchCapsules jobKind = iota
 
 // maxConcurrency = 256
 // // max concurrency set from config
@@ -36,16 +35,13 @@ var workerLevels = []workerLevel{
 }
 
 type scannerInf interface {
-	batchQueryCreditForDelegators(ctx context.Context, credit common.Address, delegators []common.Address, blockNumber *big.Int) (map[common.Address]*big.Int, error)
-	fullScan(ctx context.Context, delegator common.Address, blockNumber *big.Int) (creditAddr common.Address, pooledBNB, lockedBNB *big.Int, err error)
-	refreshValidators() (updated bool, err error)
+	batchQueryCapsules(ctx context.Context, capsules []common.Address, blockNumber *big.Int) (map[common.Address]*big.Int, error)
 }
 
 type job struct {
 	kind       jobKind
 	block      uint64
-	credit     common.Address
-	delegators []common.Address
+	capsules   []common.Address
 	resultCh   chan result
 }
 
@@ -134,37 +130,12 @@ func (wp *workerPool) spawnWorker() {
 // handleJob processes a job in the worker goroutine
 func (wp *workerPool) handleJob(ctx context.Context, j job) result {
 	switch j.kind {
-	case jobKindBatchDelegators:
+	case jobKindBatchCapsules:
 		blockNumber := new(big.Int).SetUint64(j.block)
-		amounts, err := wp.scanner.batchQueryCreditForDelegators(ctx, j.credit, j.delegators, blockNumber)
+		amounts, err := wp.scanner.batchQueryCapsules(ctx, j.capsules, blockNumber)
 		return result{
 			amounts: amounts,
 			err:     err,
-		}
-	case jobKindFullScan:
-		if len(j.delegators) != 1 {
-			return result{err: errInvalidJob}
-		}
-		d := j.delegators[0]
-		blockNumber := new(big.Int).SetUint64(j.block)
-		_, pooledBNB, lockedBNB, err := wp.scanner.fullScan(ctx, d, blockNumber)
-		if err != nil {
-			if err == errNoValidatorFound {
-				return result{
-					amounts: map[common.Address]*big.Int{
-						d: big.NewInt(0),
-					},
-					err: nil,
-				}
-			}
-			return result{
-				err: err,
-			}
-		}
-		total := new(big.Int).Add(pooledBNB, lockedBNB)
-		return result{
-			amounts: map[common.Address]*big.Int{d: total},
-			err:     nil,
 		}
 	default:
 		return result{
@@ -288,10 +259,6 @@ func (wp *workerPool) runBatch(ctx context.Context, jobs []job) (map[common.Addr
 	}()
 	var firstErr error
 	res := make(map[common.Address]uint64)
-	refreshed := false
-	validatorSetChanged := true
-	retryCount := 0
-	batchResultCh2 := make(chan result, 10)
 	for i := 0; i < len(jobs); i++ {
 		select {
 		case <-ctx.Done():
@@ -306,46 +273,10 @@ func (wp *workerPool) runBatch(ctx context.Context, jobs []job) (map[common.Addr
 				continue
 			}
 			for d, amt := range r.amounts {
-				if amt.Sign() <= 0 && validatorSetChanged {
-					if !refreshed {
-						updated, err := wp.scanner.refreshValidators()
-						if err != nil {
-							return nil, err
-						}
-						refreshed = true
-						validatorSetChanged = updated
-						if !validatorSetChanged {
-							res[d] = 0
-							continue
-						}
-					}
-					retryCount++
-					wp.jobs <- job{
-						kind:       jobKindFullScan,
-						delegators: []common.Address{d},
-						resultCh:   batchResultCh2,
-					}
+				if amt == nil || amt.Sign() <= 0 {
+					res[d] = 0
 					continue
 				}
-				amt = amt.Div(amt, divisor)
-				if !amt.IsUint64() {
-					return nil, fmt.Errorf("total balance exceeds uint64 max for delegator %s: %s", d.Hex(), amt.String())
-				}
-				res[d] = amt.Uint64()
-			}
-		}
-	}
-	for retryCount > 0 {
-		select {
-		case <-ctx.Done():
-		case r := <-batchResultCh2:
-			if r.err != nil {
-				if firstErr == nil {
-					firstErr = r.err
-				}
-				continue
-			}
-			for d, amt := range r.amounts {
 				amt = amt.Div(amt, divisor)
 				if !amt.IsUint64() {
 					return nil, fmt.Errorf("total balance exceeds uint64 max for delegator %s: %s", d.Hex(), amt.String())

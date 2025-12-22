@@ -313,7 +313,7 @@ func (s *Source) Start() map[string]*PriceSync {
 	// main routine of source, listen to:
 	// addToken to add a new token for the source and start fetching that token's price
 	// tokenNotConfigured to reload the source's config file for required token
-	// stop closes the source routines and set runnign status to false
+	// stop closes the source routines and set running status to false
 	go func() {
 		for {
 			select {

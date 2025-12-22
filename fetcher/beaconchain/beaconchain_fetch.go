@@ -131,8 +131,12 @@ func (s *source) fetch(token string) (*types.PriceInfo, error) {
 	// use 'no copy' version to avoid copying stakers
 	sInfos, version, withdrawVersion := s.Stakers.GetStakersNoCopy()
 	if len(sInfos) == 0 {
-		// return zero price when there's no stakers
-		return &types.PriceInfo{}, nil
+		latestChangesBytes = fetchertypes.NSTZeroChanges
+		return &types.PriceInfo{
+			Price: string(latestChangesBytes),
+			// combine epoch and version as roundID in priceInfo
+			RoundID: fmt.Sprintf("%s|%s|%s", strconv.FormatUint(finalizedEpoch, 10), strconv.FormatUint(version, 10), strconv.FormatUint(withdrawVersion, 10)),
+		}, nil
 	}
 	// --- CL/EL synchronization ---
 	elBlockNumber, clSlot, stateRoot, err := getFinalizedELBlockNumber()
@@ -161,6 +165,7 @@ func (s *source) fetch(token string) (*types.PriceInfo, error) {
 		validators := stakerInfo.Validators
 		l := len(validators)
 		if l == 0 {
+			s.Logger().Error("staker has no validators", "staker_index", stakerIdx, "staker", stakerInfo.Address)
 			continue
 		}
 		stakerBalance := uint64(0)

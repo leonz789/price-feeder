@@ -10,7 +10,6 @@ import (
 	"github.com/cosmos/gogoproto/proto"
 	"github.com/ethereum/go-ethereum/common"
 	oracletypes "github.com/imua-xyz/imuachain/x/oracle/types"
-	"github.com/imua-xyz/price-feeder/fetcher/types"
 	fetchertypes "github.com/imua-xyz/price-feeder/fetcher/types"
 	feedertypes "github.com/imua-xyz/price-feeder/types"
 )
@@ -29,80 +28,68 @@ func (s *source) fetch(token string) (*fetchertypes.PriceInfo, error) {
 	if fetchertypes.NSTToken(token) != fetchertypes.NativeTokenBSC {
 		return nil, feedertypes.ErrTokenNotSupported.Wrap(fmt.Sprintf("only support native-eth-restaking %s, got:%s", fetchertypes.NativeTokenBSC, token))
 	}
-
-	// Round block height down to nearest 100 for consistency with batch querying
-	height := s.getCurrentHeight() / 100 * 100
 	sInfos, v, wV := s.Stakers.GetStakersNoCopy()
-	if height <= finalizedBlock || v <= finalizedVersion || wV <= finalizedWithdrawVersion {
-		s.Logger().Info("fetch delegators from beaconchain, no change in height(round to 100) or version, return latestChangesBytes", "height", height, "version", finalizedVersion, "withdrawVersion", finalizedWithdrawVersion)
-		return &types.PriceInfo{
+	// return zero price when there's no stakers
+	if len(sInfos) == 0 {
+		latestChangesBytes = fetchertypes.NSTZeroChanges
+		return &fetchertypes.PriceInfo{
 			Price: string(latestChangesBytes),
 			// combine height and versions as roundID in priceInfo
 			RoundID: fmt.Sprintf("%s|%s|%s", strconv.FormatUint(finalizedBlock, 10), strconv.FormatUint(finalizedVersion, 10), strconv.FormatUint(finalizedWithdrawVersion, 10)),
 		}, nil
-		//		return nil, nil
+	}
+	// Round block height down to nearest 100 for consistency with batch querying
+	height := s.getCurrentHeight() / 100 * 100
+
+	if height <= finalizedBlock || v <= finalizedVersion || wV <= finalizedWithdrawVersion {
+		s.Logger().Info("fetch delegators from beaconchain, no change in height(round to 100) or version, return latestChangesBytes", "height", height, "version", finalizedVersion, "withdrawVersion", finalizedWithdrawVersion)
+		return &fetchertypes.PriceInfo{
+			Price: string(latestChangesBytes),
+			// combine height and versions as roundID in priceInfo
+			RoundID: fmt.Sprintf("%s|%s|%s", strconv.FormatUint(finalizedBlock, 10), strconv.FormatUint(finalizedVersion, 10), strconv.FormatUint(finalizedWithdrawVersion, 10)),
+		}, nil
 	}
 
 	// TODO: 20 should be set as a value that less than fetching interval
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	delegators := []common.Address{}
-	delegator2Idx := make(map[common.Address]uint32)
+	capsules := []common.Address{}
+	capsule2Idx := make(map[common.Address]uint32)
 	for stakerIdx, sInfo := range sInfos {
-		// this should not happen
+		// oracle events now set Validators[0] as capsule address for BSC
 		if len(sInfo.Validators) != 1 {
-			s.Logger().Error("for bsc native restaker, one and only one valiators must be bonded to the staker")
+			s.Logger().Error("invalid staker validators length for bsc", "staker_index", stakerIdx, "validators_length", len(sInfo.Validators))
 			continue
 		}
-		addr := common.HexToAddress(sInfo.Validators[0])
-		delegators = append(delegators, addr)
-		delegator2Idx[addr] = stakerIdx
+		capAddr := common.HexToAddress(sInfo.Validators[0])
+		capsules = append(capsules, capAddr)
+		capsule2Idx[capAddr] = stakerIdx
 	}
-	grouped := make(map[common.Address][]common.Address)
-	jobs := make([]job, 0)
-	for _, d := range delegators {
-		if v, exists := s.cache.get(d); exists {
-			grouped[v] = append(grouped[v], d)
-		} else {
-			jobs = append(jobs, job{
-				kind:       jobKindFullScan,
-				delegators: []common.Address{d},
-				block:      height,
-			})
+
+	jobs := make([]job, 0, (len(capsules)+batchSize-1)/batchSize)
+	for aIdx := 0; aIdx < len(capsules); aIdx += batchSize {
+		bIdx := aIdx + batchSize
+		if bIdx > len(capsules) {
+			bIdx = len(capsules)
 		}
-	}
-	for v, ds := range grouped {
-		l := len(ds)
-		if l == 0 {
-			continue
-		}
-		aIdx := 0
-		for aIdx < l {
-			bIdx := aIdx + batchSize
-			if bIdx > l {
-				bIdx = l
-			}
-			jobs = append(jobs, job{
-				kind:       jobKindBatchDelegators,
-				credit:     v,
-				delegators: ds[aIdx:bIdx],
-				block:      height,
-			})
-			aIdx += batchSize
-		}
+		jobs = append(jobs, job{
+			kind:     jobKindBatchCapsules,
+			capsules: capsules[aIdx:bIdx],
+			block:    height,
+		})
 	}
 	res, err := s.pool.runBatch(ctx, jobs)
 	if err != nil {
 		return nil, err
 	}
 	changedStakerBalances := make([]*oracletypes.NSTKV, 0, len(sInfos))
-	for _, d := range delegators {
-		sIdx := delegator2Idx[d]
+	for _, capAddr := range capsules {
+		sIdx := capsule2Idx[capAddr]
 		sInfo := sInfos[sIdx]
-		if sInfo.Balance != res[d] || sInfo.WithdrawVersion > finalizedWithdrawVersion {
+		if sInfo.Balance != res[capAddr] || sInfo.WithdrawVersion > finalizedWithdrawVersion {
 			changedStakerBalances = append(changedStakerBalances, &oracletypes.NSTKV{
 				StakerIndex: sIdx,
-				Balance:     res[d],
+				Balance:     res[capAddr],
 			})
 		}
 	}
@@ -131,7 +118,7 @@ func (s *source) fetch(token string) (*fetchertypes.PriceInfo, error) {
 	finalizedVersion = v
 	finalizedWithdrawVersion = wV
 
-	return &types.PriceInfo{
+	return &fetchertypes.PriceInfo{
 		Price:   string(latestChangesBytes),
 		RoundID: fmt.Sprintf("%s|%s|%s", strconv.FormatUint(finalizedBlock, 10), strconv.FormatUint(v, 10), strconv.FormatUint(wV, 10)),
 	}, nil

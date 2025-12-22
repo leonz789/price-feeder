@@ -1,11 +1,8 @@
 package bsc
 
 import (
-	"errors"
 	"fmt"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
@@ -41,45 +38,13 @@ const (
 	}
   ]`
 
-	stakeCreditABIJSONPooled = `[
+	capsuleABIJSON = `[
   {
-    "inputs": [
-      {"internalType": "address","name": "account","type": "address"}
-    ],
-    "name": "getPooledBNB",
+    "inputs": [],
+    "name": "getPooledAndLockedBNBs",
     "outputs": [
-      {"internalType": "uint256","name": "", "type": "uint256"}
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  }
-]`
-	stakeCreditABIJSONLocked = `[
-  {
-    "inputs": [
-      {"internalType": "address","name": "delegator","type": "address"},
-      {"internalType": "uint256","name": "number","type": "uint256"}
-    ],
-    "name": "lockedBNBs",
-    "outputs": [
-      {"internalType": "uint256","name": "", "type": "uint256"}
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  }
-]`
-
-	stakeHubABIJSON = `[
-  {
-    "inputs": [
-      {"internalType": "uint256","name": "offset","type": "uint256"},
-      {"internalType": "uint256","name": "limit","type": "uint256"}
-    ],
-    "name": "getValidators",
-    "outputs": [
-      {"internalType": "address[]","name": "operatorAddrs","type": "address[]"},
-      {"internalType": "address[]","name": "creditAddrs","type": "address[]"},
-      {"internalType": "uint256","name": "totalLength","type": "uint256"}
+      {"internalType": "uint256","name": "pooledBNB","type": "uint256"},
+      {"internalType": "uint256","name": "lockedBNB","type": "uint256"}
     ],
     "stateMutability": "view",
     "type": "function"
@@ -90,44 +55,14 @@ const (
 var (
 	logger        feedertypes.LoggerInf
 	defaultSource *source
-
-	errNoValidatorFound = errors.New("delegator not bonded to any validator")
-	errInvalidJob       = errors.New("invalid worker job")
-
-	// errBig is expected to be used as a helper, and should be constructed where needed,
-	// since d and amt are not in scope here. Remove it from global scope.
+	errInvalidJob = fmt.Errorf("invalid worker job")
 )
 
 type config struct {
-	MuilticallAddr string        `yaml:"multicall_addr"`
-	StakeHubAddr   string        `yaml:"stake_hub_addr"`
-	CacheTTL       time.Duration `yaml:"cache_ttl"`
+	MuilticallAddr string `yaml:"multicall_addr"`
 	URLs           struct {
 		Bsc string `yaml:"bsc"`
 	} `yaml:"urls"`
-	// NumWorkers     int `yaml:"num_workers"`
-	// JobBuffer      int `yaml:"job_buffer"`
-}
-
-type validatorInfo struct {
-	Operator       common.Address
-	CreditContract common.Address
-}
-
-type cacheEntry struct {
-	ValidatorCredit common.Address // credit contract address
-	// ExpireAt        time.Time
-}
-
-type validatorSet struct {
-	mu   sync.RWMutex
-	vals []validatorInfo
-}
-
-type delegatorCache struct {
-	// TODO: add cap, and clear expired entries when hit cap
-	//	ttl   time.Duration
-	store sync.Map
 }
 
 type source struct {
@@ -135,78 +70,11 @@ type source struct {
 	client *ethclient.Client
 
 	multicallAddr common.Address
-	stakeHubAddr  common.Address
-
-	// ttl time.Duration
 
 	multicallABI abi.ABI
-	pooledABI    abi.ABI
-	lockedABI    abi.ABI
-	stakeHubABI  abi.ABI
-
-	//	mu    sync.RWMutex
-	// cache map[common.Address]cacheEntry
-	cache *delegatorCache
-	//	validators []validatorInfo // operator + creditContract
-	validators *validatorSet
+	capsuleABI   abi.ABI
 
 	pool *workerPool
-}
-
-func (d *delegatorCache) set(addr, v common.Address) {
-	d.store.Store(addr, cacheEntry{
-		ValidatorCredit: v,
-		//	ExpireAt:        time.Now().Add(d.ttl),
-	})
-}
-
-func (d *delegatorCache) get(delegator common.Address) (common.Address, bool) {
-	v, ok := d.store.Load(delegator)
-	if !ok {
-		return common.Address{}, false
-	}
-	entry := v.(cacheEntry)
-	// if time.Now().After(entry.ExpireAt) || (entry.ValidatorCredit == common.Address{}) {
-	if entry.ValidatorCredit == (common.Address{}) {
-		return common.Address{}, false
-	}
-	return entry.ValidatorCredit, true
-}
-
-func (d *delegatorCache) delete(addr common.Address) {
-	d.store.Delete(addr)
-}
-
-// func newDelegatorCache(ttl time.Duration) *delegatorCache {
-func newDelegatorCache() *delegatorCache {
-	//	if ttl <= 0 {
-	//		ttl = 24 * time.Hour
-	//	}
-	return &delegatorCache{
-		//	ttl:   ttl,
-		store: sync.Map{},
-	}
-}
-
-func (vs *validatorSet) getValidators() []validatorInfo {
-	vs.mu.RLock()
-	cpy := make([]validatorInfo, len(vs.vals))
-	copy(cpy, vs.vals)
-	vs.mu.RUnlock()
-	return cpy
-}
-
-func (vs *validatorSet) setValidators(vals []validatorInfo) {
-	vs.mu.Lock()
-	vs.vals = make([]validatorInfo, len(vals))
-	copy(vs.vals, vals)
-	vs.mu.Unlock()
-}
-func newValidatorSet() *validatorSet {
-	return &validatorSet{
-		mu:   sync.RWMutex{},
-		vals: make([]validatorInfo, 0, 100),
-	}
 }
 
 func init() {
@@ -230,19 +98,9 @@ func initBSC(cfgPath string, l feedertypes.LoggerInf) (fetchertypes.SourceInf, e
 		return nil, feedertypes.ErrInitFail.Wrap(fmt.Sprintf("failed to parse multicall ABI, error:%v", err))
 	}
 
-	pooledABI, err := abi.JSON(strings.NewReader(stakeCreditABIJSONPooled))
+	capsuleABI, err := abi.JSON(strings.NewReader(capsuleABIJSON))
 	if err != nil {
-		return nil, feedertypes.ErrInitFail.Wrap(fmt.Sprintf("failed to parse stake credit ABI, error:%v", err))
-	}
-
-	lockedABI, err := abi.JSON(strings.NewReader(stakeCreditABIJSONLocked))
-	if err != nil {
-		return nil, feedertypes.ErrInitFail.Wrap(fmt.Sprintf("failed to parse stake credit ABI, error:%v", err))
-	}
-
-	stakeHubABI, err := abi.JSON(strings.NewReader(stakeHubABIJSON))
-	if err != nil {
-		return nil, feedertypes.ErrInitFail.Wrap(fmt.Sprintf("failed to parse stake hub ABI, error:%v", err))
+		return nil, feedertypes.ErrInitFail.Wrap(fmt.Sprintf("failed to parse capsule ABI, error:%v", err))
 	}
 
 	client, err := ethclient.Dial(cfg.URLs.Bsc)
@@ -256,13 +114,8 @@ func initBSC(cfgPath string, l feedertypes.LoggerInf) (fetchertypes.SourceInf, e
 		Source:        nsttypes.NewSource(logger, fetchertypes.Bsc, defaultSource.fetch, cfgPath, defaultSource.reload),
 		client:        client,
 		multicallAddr: common.HexToAddress(cfg.MuilticallAddr),
-		stakeHubAddr:  common.HexToAddress(cfg.StakeHubAddr),
 		multicallABI:  multicallABI,
-		pooledABI:     pooledABI,
-		lockedABI:     lockedABI,
-		stakeHubABI:   stakeHubABI,
-		cache:         newDelegatorCache(),
-		validators:    newValidatorSet(),
+		capsuleABI:    capsuleABI,
 		pool: startNewWorkerPool(defaultSource, workerPoolConfig{
 			numWorkers: 10,
 			jobBuffer:  100,
