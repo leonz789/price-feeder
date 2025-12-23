@@ -1,9 +1,12 @@
 package bsc
 
 import (
+	"context"
 	"fmt"
+	"math/big"
 	"strings"
 
+	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
@@ -67,7 +70,7 @@ type config struct {
 
 type source struct {
 	*nsttypes.Source
-	client *ethclient.Client
+	client ethClientInf
 
 	multicallAddr common.Address
 
@@ -75,6 +78,12 @@ type source struct {
 	capsuleABI   abi.ABI
 
 	pool *workerPool
+}
+
+// ethClientInf allows mocking eth client in tests.
+type ethClientInf interface {
+	CallContract(ctx context.Context, msg ethereum.CallMsg, blockNumber *big.Int) ([]byte, error)
+	BlockNumber(ctx context.Context) (uint64, error)
 }
 
 func init() {

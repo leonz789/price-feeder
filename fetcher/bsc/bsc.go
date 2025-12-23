@@ -17,8 +17,8 @@ var _ scannerInf = &source{}
 var divisor = big.NewInt(1e9)
 
 type multicall struct {
-	target   common.Address // matches ABI field "target"
-	calldata []byte         // matches ABI field "callData"
+	Target   common.Address `abi:"target"`
+	CallData []byte         `abi:"callData"`
 }
 
 // batchQueryCapsules queries capsule.getPooledAndLockedBNBs() for each capsule address via multicall.
@@ -30,7 +30,7 @@ func (s *source) batchQueryCapsules(ctx context.Context, capsules []common.Addre
 		if err != nil {
 			return nil, err
 		}
-		calls = append(calls, multicall{target: capAddr, calldata: callData})
+		calls = append(calls, multicall{Target: capAddr, CallData: callData})
 	}
 
 	calldata, err := s.multicallABI.Pack("aggregate", calls)

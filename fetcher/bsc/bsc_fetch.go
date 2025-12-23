@@ -41,7 +41,8 @@ func (s *source) fetch(token string) (*fetchertypes.PriceInfo, error) {
 	// Round block height down to nearest 100 for consistency with batch querying
 	height := s.getCurrentHeight() / 100 * 100
 
-	if height <= finalizedBlock || v <= finalizedVersion || wV <= finalizedWithdrawVersion {
+	// Only skip when all are unchanged (same semantics as other NST fetchers)
+	if height <= finalizedBlock && v <= finalizedVersion && wV <= finalizedWithdrawVersion {
 		s.Logger().Info("fetch delegators from beaconchain, no change in height(round to 100) or version, return latestChangesBytes", "height", height, "version", finalizedVersion, "withdrawVersion", finalizedWithdrawVersion)
 		return &fetchertypes.PriceInfo{
 			Price: string(latestChangesBytes),
