@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/imua-xyz/price-feeder/fetcher"
+	"github.com/imua-xyz/price-feeder/fetcher/bridge"
 	"github.com/imua-xyz/price-feeder/imuaclient"
 	itypes "github.com/imua-xyz/price-feeder/internal/types"
 	"github.com/imua-xyz/price-feeder/types"
@@ -103,6 +104,18 @@ func RunPriceFeeder(conf *feedertypes.Config, logger feedertypes.LoggerInf, mnem
 		}
 	}
 
+	// Initialize bridge manager for outbound checkpoint signing and delivery.
+	var bridgeMgr *bridge.BridgeManager
+	if conf.Bridge.Enabled {
+		var err error
+		bridgeMgr, err = bridge.NewBridgeManager(conf.Bridge, logger, conf.Imua.Rpc)
+		if err != nil {
+			logger.Error("failed to initialize bridge manager, bridge features disabled", "error", err)
+		} else {
+			logger.Info("bridge manager initialized", "chains", len(conf.Bridge.Chains))
+		}
+	}
+
 	exited := make(chan struct{})
 	go func() {
 		defer ecClient.Close()
@@ -160,6 +173,11 @@ func RunPriceFeeder(conf *feedertypes.Config, logger feedertypes.LoggerInf, mnem
 					}
 				}
 				feeders.Trigger(e.Height(), e.FeederIDs())
+
+				// Bridge: check for pending checkpoints to sign and finalized ones to deliver.
+				if bridgeMgr != nil {
+					bridgeMgr.OnNewBlock(e.Height())
+				}
 			case *imuaclient.EventUpdatePrice:
 				finalPrices := make([]*finalPrice, 0, len(e.Prices()))
 				var syncPriceInfo string
